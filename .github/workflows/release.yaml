@@ -1,0 +1,120 @@
+# Build and publish xyzen-relay server-side images to ghcr.io.
+#
+# Triggers:
+#   - push to main           → push :main + :sha tags
+#   - tag v*                 → push :sha + :v* + :latest tags
+#   - workflow_dispatch      → manual run
+#
+# We deliberately publish under ghcr.io/scienceol/xyzen-relay-* so
+# any cluster (or any developer) can `docker pull` without auth — the
+# repo itself is public. The k8s manifests pin to a specific :sha or
+# :v* tag so a "latest" rolling deploy never happens by accident.
+#
+# What's NOT here: the desktop-side capturer (mac-capturer + capturer
+# crates). Those compile only on macOS and ship inside the Xyzen
+# runner binary via the runner repo's own release pipeline.
+
+name: release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/scienceol/xyzen-relay
+
+jobs:
+  test:
+    name: test (cargo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        # mac-capturer / capturer-via-mac-capturer are macOS-only;
+        # exclude them on the linux clippy pass so we don't fight
+        # missing Apple frameworks. Clippy is informative-only for
+        # now (no `-D warnings`); we'll tighten once the existing
+        # field-reassign-with-default cluster is cleaned up.
+        run: |
+          cargo clippy --workspace \
+            --exclude xyzen-relay-mac-capturer \
+            --exclude xyzen-relay-capturer
+      - name: cargo test
+        run: |
+          cargo test --workspace \
+            --exclude xyzen-relay-mac-capturer \
+            --exclude xyzen-relay-capturer
+
+  build-and-push:
+    name: build ${{ matrix.bin }}
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        bin: [stream, control, rendezvous, relay]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          # `${{ github.actor }}` resolves to whoever pushed; for tag
+          # builds that's the tagger. Token is the auto-issued
+          # GITHUB_TOKEN — `permissions.packages: write` above grants
+          # it ghcr push rights without any manual PAT.
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          IMAGE="${IMAGE_PREFIX}-${{ matrix.bin }}"
+          TAGS="${IMAGE}:sha-${GITHUB_SHA::12}"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            TAGS="${TAGS},${IMAGE}:${VERSION},${IMAGE}:latest"
+          elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
+            TAGS="${TAGS},${IMAGE}:main"
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          # We deliberately keep amd64-only for now: every k8s pool we
+          # operate (sgk / shk) runs amd64 nodes. Adding arm64 is one
+          # extra QEMU / `--platform` line when the time comes; not
+          # worth the build-time cost today.
+          platforms: linux/amd64
+          build-args: |
+            BIN=${{ matrix.bin }}
+          tags: ${{ steps.tags.outputs.tags }}
+          # GitHub-cache backend so the cargo-chef layer (the slow
+          # one) survives across builds.
+          cache-from: type=gha,scope=${{ matrix.bin }}
+          cache-to: type=gha,scope=${{ matrix.bin }},mode=max

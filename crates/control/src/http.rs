@@ -111,12 +111,11 @@ async fn get_peer(
     State(s): State<AppState>,
 ) -> Result<Json<PeerResp>, AppError> {
     require_token(&headers, &s.token)?;
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT peer_id FROM peers WHERE user_id = ?")
-            .bind(&user_id)
-            .fetch_optional(&s.pool)
-            .await
-            .map_err(AppError::db)?;
+    let row: Option<(String,)> = sqlx::query_as("SELECT peer_id FROM peers WHERE user_id = ?")
+        .bind(&user_id)
+        .fetch_optional(&s.pool)
+        .await
+        .map_err(AppError::db)?;
     let (peer_id,) = row.ok_or_else(|| AppError::not_found("user_id not bound"))?;
     Ok(Json(PeerResp { user_id, peer_id }))
 }

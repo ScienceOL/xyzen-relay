@@ -59,8 +59,16 @@ fn main() {
     println!("cargo:rustc-link-lib=static=MacCapturer");
 
     // System frameworks.
-    for fw in ["ScreenCaptureKit", "VideoToolbox", "CoreMedia", "CoreVideo",
-               "Foundation", "CoreFoundation", "AVFoundation", "CoreGraphics"] {
+    for fw in [
+        "ScreenCaptureKit",
+        "VideoToolbox",
+        "CoreMedia",
+        "CoreVideo",
+        "Foundation",
+        "CoreFoundation",
+        "AVFoundation",
+        "CoreGraphics",
+    ] {
         println!("cargo:rustc-link-lib=framework={fw}");
     }
 

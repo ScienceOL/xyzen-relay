@@ -148,7 +148,9 @@ mod tests {
     fn roundtrip_short() {
         let mut codec = RustDeskCodec::new();
         let mut buf = BytesMut::new();
-        codec.encode(Bytes::from_static(b"hello"), &mut buf).unwrap();
+        codec
+            .encode(Bytes::from_static(b"hello"), &mut buf)
+            .unwrap();
         let frame = codec.decode(&mut buf).unwrap().unwrap();
         assert_eq!(&frame[..], b"hello");
     }

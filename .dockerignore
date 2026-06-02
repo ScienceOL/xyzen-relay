@@ -1,0 +1,21 @@
+# Local build artefacts — the image always builds inside the container.
+target/
+**/*.rs.bk
+
+# Local screenshot / smoke-test scratch.
+/web-test
+/scripts
+
+# Editor / OS noise.
+.git
+.github
+.idea
+.vscode
+.DS_Store
+
+# NOTE: crates/capturer and crates/mac-capturer remain present in
+# the build context — they are workspace members so Cargo's manifest
+# parser must find them. On Linux they compile to empty libs thanks
+# to a top-of-file `#![cfg(target_os = "macos")]` guard, and the
+# Dockerfile only invokes `cargo build --bin` for the four
+# server-side binaries so they're never linked into the images.

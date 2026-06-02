@@ -99,7 +99,11 @@ pub fn set_bitrate_kbps(kbps: u32) -> Result<(), &'static str> {
 /// Currently configured bitrate (kbps), or 0 if no capturer running.
 pub fn bitrate_kbps() -> u32 {
     let v = unsafe { xz_capturer_bitrate_kbps() };
-    if v < 0 { 0 } else { v as u32 }
+    if v < 0 {
+        0
+    } else {
+        v as u32
+    }
 }
 
 /// Set the target framerate. Updates SCKit + VT in one shot.
@@ -114,7 +118,11 @@ pub fn set_fps(fps: u32) -> Result<(), &'static str> {
 
 pub fn fps() -> u32 {
     let v = unsafe { xz_capturer_fps() };
-    if v < 0 { 0 } else { v as u32 }
+    if v < 0 {
+        0
+    } else {
+        v as u32
+    }
 }
 
 /// Switch output resolution. Briefly freezes the viewer (~200ms) while
@@ -131,7 +139,9 @@ pub fn set_resolution(width: u32, height: u32) -> Result<(), &'static str> {
 /// Returns `(width, height)`, or `(0, 0)` if no capturer is running.
 pub fn resolution() -> (u32, u32) {
     let v = unsafe { xz_capturer_resolution() };
-    if v <= 0 { return (0, 0); }
+    if v <= 0 {
+        return (0, 0);
+    }
     let w = ((v as u32) >> 16) & 0xFFFF;
     let h = (v as u32) & 0xFFFF;
     (w, h)

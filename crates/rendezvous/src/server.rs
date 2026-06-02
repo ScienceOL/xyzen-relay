@@ -166,8 +166,10 @@ async fn tcp_loop(
         let auditor = auditor.clone();
         tokio::spawn(async move {
             let framed = Framed::new(sock, RustDeskCodec::new());
-            if let Err(e) =
-                handle_tcp(framed, peer_addr, relay_addr, registry, udp, pending, auditor).await
+            if let Err(e) = handle_tcp(
+                framed, peer_addr, relay_addr, registry, udp, pending, auditor,
+            )
+            .await
             {
                 log::warn!("tcp {peer_addr}: {e}");
             }
@@ -200,7 +202,10 @@ async fn handle_tcp(
 
     match msg.union {
         Some(Union::PunchHoleRequest(ph)) => {
-            log::info!("tcp punch_hole_request from {peer_addr} target_id={}", ph.id);
+            log::info!(
+                "tcp punch_hole_request from {peer_addr} target_id={}",
+                ph.id
+            );
             let addr_s = peer_addr.to_string();
             auditor.emit(Event {
                 kind: "punch_request",
@@ -270,8 +275,10 @@ async fn ws_loop(
                 }
             };
             log::info!("ws connection from {peer_addr}");
-            if let Err(e) =
-                handle_ws(stream, peer_addr, relay_addr, registry, udp, pending, auditor).await
+            if let Err(e) = handle_ws(
+                stream, peer_addr, relay_addr, registry, udp, pending, auditor,
+            )
+            .await
             {
                 log::warn!("ws {peer_addr}: {e}");
             }
@@ -309,7 +316,9 @@ async fn handle_ws(
     while let Some(item) = stream.next().await {
         let frame = match item {
             Ok(WsMessage::Binary(b)) => b,
-            Ok(WsMessage::Text(_)) | Ok(WsMessage::Ping(_)) | Ok(WsMessage::Pong(_))
+            Ok(WsMessage::Text(_))
+            | Ok(WsMessage::Ping(_))
+            | Ok(WsMessage::Pong(_))
             | Ok(WsMessage::Frame(_)) => continue,
             Ok(WsMessage::Close(_)) | Err(_) => break,
         };

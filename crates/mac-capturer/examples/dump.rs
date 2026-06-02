@@ -8,8 +8,7 @@ use std::time::{Duration, Instant};
 
 fn main() {
     eprintln!("starting native mac capturer (1920x1080 @30fps, 4 Mbps)");
-    let rx = xyzen_relay_mac_capturer::start(1920, 1080, 30, 4000)
-        .expect("start mac-capturer");
+    let rx = xyzen_relay_mac_capturer::start(1920, 1080, 30, 4000).expect("start mac-capturer");
     let stdout = io::stdout();
     let mut out = stdout.lock();
     let deadline = Instant::now() + Duration::from_secs(3);

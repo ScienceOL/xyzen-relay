@@ -21,7 +21,11 @@ struct Args {
     peer_id: String,
 
     /// xyzen-stream publisher URL. Path part is auto-suffixed with the peer id.
-    #[arg(long, env = "XYZEN_STREAM_URL", default_value = "ws://127.0.0.1:21130/ws/stream")]
+    #[arg(
+        long,
+        env = "XYZEN_STREAM_URL",
+        default_value = "ws://127.0.0.1:21130/ws/stream"
+    )]
     stream_url: String,
 
     /// Frame width — capturer scales to this.
@@ -96,19 +100,27 @@ async fn main() -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn start_native(width: u32, height: u32, fps: u32, bitrate_kbps: u32)
-    -> Result<std::sync::mpsc::Receiver<xyzen_relay_mac_capturer::Nal>>
-{
+fn start_native(
+    width: u32,
+    height: u32,
+    fps: u32,
+    bitrate_kbps: u32,
+) -> Result<std::sync::mpsc::Receiver<xyzen_relay_mac_capturer::Nal>> {
     xyzen_relay_mac_capturer::start(width, height, fps, bitrate_kbps)
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 #[cfg(not(target_os = "macos"))]
-fn start_native(_w: u32, _h: u32, _fps: u32, _b: u32)
-    -> Result<std::sync::mpsc::Receiver<DummyNal>>
-{
+fn start_native(
+    _w: u32,
+    _h: u32,
+    _fps: u32,
+    _b: u32,
+) -> Result<std::sync::mpsc::Receiver<DummyNal>> {
     anyhow::bail!("xyzen-capturer: only macOS is supported in v1");
 }
 
 #[cfg(not(target_os = "macos"))]
-struct DummyNal { data: Vec<u8> }
+struct DummyNal {
+    data: Vec<u8>,
+}

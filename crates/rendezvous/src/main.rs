@@ -16,7 +16,11 @@ use anyhow::Result;
 use clap::Parser;
 
 #[derive(Debug, Parser)]
-#[command(name = "xyzen-rendezvous", version, about = "RustDesk-compatible rendezvous server")]
+#[command(
+    name = "xyzen-rendezvous",
+    version,
+    about = "RustDesk-compatible rendezvous server"
+)]
 struct Args {
     /// Public address handed to clients as their relay server.
     #[arg(long, env = "XYZEN_RELAY_ADDR", default_value = "127.0.0.1")]

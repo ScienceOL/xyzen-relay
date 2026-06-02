@@ -30,7 +30,11 @@ use tokio::sync::{broadcast, Mutex};
 use tower_http::trace::TraceLayer;
 
 #[derive(Debug, Parser)]
-#[command(name = "xyzen-stream", version, about = "binary stream fan-out for xyzen")]
+#[command(
+    name = "xyzen-stream",
+    version,
+    about = "binary stream fan-out for xyzen"
+)]
 struct Args {
     #[arg(long, env = "XYZEN_STREAM_PORT", default_value_t = 21130)]
     port: u16,
@@ -93,11 +97,7 @@ async fn stream_publisher(
     })
 }
 
-async fn handle_publisher(
-    mut ws: WebSocket,
-    peer_id: String,
-    rooms: RoomMap,
-) -> Result<()> {
+async fn handle_publisher(mut ws: WebSocket, peer_id: String, rooms: RoomMap) -> Result<()> {
     tracing::info!("publisher connected for peer_id={peer_id}");
     let tx = room_for(&rooms, &peer_id).await;
 
@@ -106,10 +106,7 @@ async fn handle_publisher(
             Message::Binary(bytes) => {
                 let n_recv = tx.receiver_count();
                 let _ = tx.send(Bytes::from(bytes));
-                tracing::trace!(
-                    "peer_id={peer_id} frame={} bytes fanout={n_recv}",
-                    "?",
-                );
+                tracing::trace!("peer_id={peer_id} frame={} bytes fanout={n_recv}", "?",);
             }
             Message::Close(_) => break,
             // Ignore text / ping / pong / fragment.
@@ -145,11 +142,7 @@ async fn stream_viewer(
     })
 }
 
-async fn handle_viewer(
-    ws: WebSocket,
-    peer_id: String,
-    rooms: RoomMap,
-) -> Result<()> {
+async fn handle_viewer(ws: WebSocket, peer_id: String, rooms: RoomMap) -> Result<()> {
     tracing::info!("viewer connected for peer_id={peer_id}");
     let tx = room_for(&rooms, &peer_id).await;
     let mut rx = tx.subscribe();
