@@ -24,6 +24,16 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", swift_src.display());
 
+    // Match the Swift target triple to the Rust target so cross-compiles
+    // (e.g. x86_64-apple-darwin built from an arm64 host) produce an object
+    // of the requested architecture.
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| "aarch64".into());
+    let swift_arch = match arch.as_str() {
+        "aarch64" => "arm64",
+        other => other,
+    };
+    let swift_target = format!("{swift_arch}-apple-macos12.3");
+
     let status = Command::new("swiftc")
         .args([
             "-emit-library",
@@ -31,7 +41,7 @@ fn main() {
             "-parse-as-library",
             "-O",
             "-target",
-            "arm64-apple-macos12.3",
+            &swift_target,
             "-module-name",
             "MacCapturer",
             // Skip the back-compat shims; we already require macOS 12.3.
