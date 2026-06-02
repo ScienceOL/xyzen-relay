@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>xyzen-relay · WebSocket smoke test</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    margin: 24px; max-width: 720px;
+  }
+  h1 { font-size: 16px; margin: 0 0 16px; font-weight: 600; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+  input, button {
+    font: inherit; padding: 4px 8px;
+    border: 1px solid currentColor; background: transparent; color: inherit;
+    border-radius: 2px;
+  }
+  input { flex: 1; }
+  button { cursor: pointer; }
+  pre {
+    border: 1px solid currentColor; padding: 12px; min-height: 240px;
+    overflow: auto; white-space: pre-wrap; margin: 0;
+  }
+  .ok  { color: #2a7a2a; }
+  .err { color: #b22; }
+  .dim { opacity: .55; }
+</style>
+</head>
+<body>
+
+<h1>xyzen-relay · WebSocket smoke test</h1>
+
+<div class="row">
+  <label class="dim">URL</label>
+  <input id="url" value="ws://localhost/ws/id">
+  <button id="btnRegister">RegisterPeer</button>
+  <button id="btnPunch">PunchHoleRequest</button>
+  <button id="btnClose">Close</button>
+</div>
+<div class="row" style="margin-top:-4px">
+  <span class="dim">presets:</span>
+  <button id="btnPresetNginx">via nginx ws://.../ws/id</button>
+  <button id="btnPresetDirect">direct ws://localhost:21118</button>
+</div>
+
+<div class="row" style="margin-bottom: 4px;">
+  <label class="dim" style="min-width:80px">peer id:</label>
+  <input id="peerId" value="WEBTEST001" style="max-width:200px">
+  <label class="dim" style="margin-left:12px">target id:</label>
+  <input id="targetId" value="WEBTEST001" style="max-width:200px">
+</div>
+
+<pre id="log"></pre>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const log = (msg, cls = '') => {
+  const span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+  $('log').appendChild(span);
+  $('log').scrollTop = $('log').scrollHeight;
+};
+
+let ws = null;
+
+function ensureWs() {
+  if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve(ws);
+  return new Promise((resolve, reject) => {
+    const url = $('url').value;
+    log(`connecting ${url}…`);
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+    ws.onopen  = () => { log(`connected`, 'ok'); resolve(ws); };
+    ws.onerror = (e) => { log(`error: ${e.message ?? 'WebSocket error'}`, 'err'); reject(e); };
+    ws.onclose = (e) => log(`closed (code=${e.code})`, 'dim');
+    ws.onmessage = (e) => {
+      const buf = new Uint8Array(e.data);
+      log(`◀ recv ${buf.length} bytes: ${hex(buf, 32)}`, 'ok');
+      const decoded = decodeRendezvous(buf);
+      if (decoded) log(`  ${decoded}`, 'ok');
+    };
+  });
+}
+
+// ---- minimal protobuf encoder/decoder ---------------------------------
+
+function varint(n) {
+  const out = [];
+  while (n >= 0x80) {
+    out.push((n & 0x7f) | 0x80);
+    n >>>= 7;
+  }
+  out.push(n & 0x7f);
+  return out;
+}
+function tag(field, wire) { return varint((field << 3) | wire); }
+function lenDelim(field, payload) {
+  return [...tag(field, 2), ...varint(payload.length), ...payload];
+}
+function strField(field, s) {
+  const enc = new TextEncoder().encode(s);
+  return lenDelim(field, [...enc]);
+}
+function varintField(field, n) {
+  return [...tag(field, 0), ...varint(n)];
+}
+
+// RegisterPeer (msg type 6 in RendezvousMessage.union)
+function buildRegisterPeer(id) {
+  const inner = [
+    ...strField(1, id),       // string id = 1
+    ...varintField(2, 0),     // int32 serial = 2
+  ];
+  return new Uint8Array(lenDelim(6, inner));
+}
+
+// PunchHoleRequest (msg type 8)
+function buildPunchHoleRequest(targetId) {
+  const inner = [
+    ...strField(1, targetId), // string id = 1
+    // omit other fields for smoke test
+  ];
+  return new Uint8Array(lenDelim(8, inner));
+}
+
+// Quick'n'dirty decoder: tells us which top-level oneof tag we got.
+function decodeRendezvous(buf) {
+  if (buf.length === 0) return '(empty)';
+  const tag = buf[0];
+  const field = tag >>> 3;
+  const wire = tag & 7;
+  const tags = {
+    7:  'RegisterPeerResponse',
+    9:  'PunchHole',
+    11: 'PunchHoleResponse',
+    16: 'RegisterPkResponse',
+    18: 'RequestRelay',
+    19: 'RelayResponse',
+  };
+  return `decoded: field=${field} (${tags[field] ?? '?'}) wire=${wire}`;
+}
+
+function hex(arr, max = 16) {
+  const slice = Array.from(arr.slice(0, max));
+  const tail = arr.length > max ? '…' : '';
+  return slice.map(b => b.toString(16).padStart(2, '0')).join('') + tail;
+}
+
+// ---- buttons ----------------------------------------------------------
+
+$('btnRegister').onclick = async () => {
+  const w = await ensureWs();
+  const payload = buildRegisterPeer($('peerId').value);
+  log(`▶ send RegisterPeer id=${$('peerId').value} (${payload.length} bytes): ${hex(payload, 32)}`);
+  w.send(payload);
+};
+
+$('btnPunch').onclick = async () => {
+  const w = await ensureWs();
+  const payload = buildPunchHoleRequest($('targetId').value);
+  log(`▶ send PunchHoleRequest target=${$('targetId').value} (${payload.length} bytes): ${hex(payload, 32)}`);
+  w.send(payload);
+};
+
+$('btnClose').onclick = () => {
+  if (ws) { ws.close(); ws = null; }
+};
+
+$('btnPresetNginx').onclick  = () => { $('url').value = 'ws://localhost/ws/id'; };
+$('btnPresetDirect').onclick = () => { $('url').value = 'ws://localhost:21118'; };
+</script>
+
+</body>
+</html>

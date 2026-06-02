@@ -1,0 +1,21 @@
+[package]
+name = "xyzen-relay-mac-capturer"
+version.workspace = true
+edition.workspace = true
+# Dual-licensed: this crate contains only first-party code (no AGPL
+# upstream sources). MIT lets it be embedded into the MIT-licensed
+# xyzen-runner without spreading AGPL through the runner workspace;
+# AGPL keeps it compatible with the rest of xyzen-relay.
+license = "MIT OR AGPL-3.0-or-later"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+log.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[build-dependencies]
+# We compile the Swift sources by shelling out to `swiftc` from build.rs;
+# no Rust deps needed here.

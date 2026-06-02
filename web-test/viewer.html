@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>xyzen-stream viewer (WebCodecs)</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    margin: 16px; background: #000; color: #ccc;
+  }
+  header { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+  input, button {
+    font: inherit; padding: 4px 8px;
+    border: 1px solid #444; background: #111; color: #ccc;
+    border-radius: 2px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: #888; }
+  canvas { width: 100%; max-width: 1200px; background: #000; display: block; }
+  #status { margin-top: 8px; opacity: .7; white-space: pre-wrap; max-height: 200px; overflow: auto; }
+  .ok  { color: #6c6; }
+  .err { color: #f66; }
+</style>
+</head>
+<body>
+
+<header>
+  <span style="opacity:.6">peer:</span>
+  <input id="peer" value="test123" style="width: 180px">
+  <button id="btnStart">Start</button>
+  <button id="btnStop">Stop</button>
+  <span id="meter" style="margin-left:auto;opacity:.6"></span>
+</header>
+
+<canvas id="cv" width="1280" height="720"></canvas>
+
+<pre id="status"></pre>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const log = (msg, cls = '') => {
+  const el = $('status');
+  const span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+};
+
+let ws = null;
+let decoder = null;
+let bytesWindow = 0;
+let framesWindow = 0;
+let lastMeter = performance.now();
+let configured = false;
+let sawKey = false;
+let nalQueue = [];   // accumulated NALs we'll flush together as one chunk
+
+const ctx = $('cv').getContext('2d');
+
+function startCodeLen(buf) {
+  if (buf[0] === 0 && buf[1] === 0 && buf[2] === 1) return 3;
+  if (buf[0] === 0 && buf[1] === 0 && buf[2] === 0 && buf[3] === 1) return 4;
+  return 0;
+}
+
+function nalType(buf) {
+  return buf[startCodeLen(buf)] & 0x1f;
+}
+
+/// Build the WebCodecs codec string from an SPS NAL.
+/// SPS layout after start code + NAL header byte:
+///   [profile_idc][constraint_flags][level_idc][...]
+function codecStringFromSps(spsNal) {
+  const off = startCodeLen(spsNal) + 1;  // skip start code + NAL header
+  const profile = spsNal[off];
+  const constraint = spsNal[off + 1];
+  const level = spsNal[off + 2];
+  const hex = (n) => n.toString(16).padStart(2, '0').toUpperCase();
+  return `avc1.${hex(profile)}${hex(constraint)}${hex(level)}`;
+}
+
+function start() {
+  stop();
+  const peer = $('peer').value.trim();
+  if (!peer) { log('peer required', 'err'); return; }
+
+  if (!('VideoDecoder' in window)) {
+    log('No WebCodecs VideoDecoder API in this browser', 'err'); return;
+  }
+
+  const u = new URL(location.href);
+  const wsHost = u.searchParams.get('host') || 'localhost'; // nginx :80
+  const url = `ws://${wsHost}/ws/view/${encodeURIComponent(peer)}`;
+  log(`connecting ${url}…`);
+
+  decoder = new VideoDecoder({
+    output: (frame) => {
+      framesWindow++;
+      // Resize canvas to source on first frame.
+      if ($('cv').width !== frame.displayWidth || $('cv').height !== frame.displayHeight) {
+        $('cv').width = frame.displayWidth;
+        $('cv').height = frame.displayHeight;
+      }
+      ctx.drawImage(frame, 0, 0);
+      frame.close();
+    },
+    error: (e) => log(`decoder error: ${e.message}`, 'err'),
+  });
+
+  ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => log('ws open', 'ok');
+  ws.onerror = () => log('ws error', 'err');
+  ws.onclose = () => log('ws closed');
+  ws.onmessage = (e) => {
+    const buf = new Uint8Array(e.data);
+    bytesWindow += buf.byteLength;
+    pushNal(buf);
+  };
+}
+
+function concat(parts) {
+  let n = 0; for (const p of parts) n += p.byteLength;
+  const out = new Uint8Array(n);
+  let off = 0; for (const p of parts) { out.set(p, off); off += p.byteLength; }
+  return out;
+}
+
+function pushNal(buf) {
+  const t = nalType(buf);
+
+  // Configure the decoder the first time we see SPS — derive the codec
+  // string from the SPS itself so we always match the encoder's profile/level.
+  if (!configured) {
+    if (t !== 7) return; // wait for SPS
+    const codec = codecStringFromSps(buf);
+    decoder.configure({
+      codec,
+      optimizeForLatency: true,
+    });
+    configured = true;
+    log(`decoder configured: ${codec}`, 'ok');
+  }
+
+  // Until we've fed an IDR, accumulate NALs (SPS + PPS + ... + IDR).
+  // After that we need to keep merging SPS/PPS into the next IDR chunk
+  // (so a viewer that joins mid-stream still gets a self-contained key).
+  if (!sawKey) {
+    nalQueue.push(buf);
+    if (t === 5) {
+      // First IDR — flush SPS+PPS+IDR as one keyframe.
+      const data = concat(nalQueue);
+      nalQueue = [];
+      sawKey = true;
+      try {
+        decoder.decode(new EncodedVideoChunk({
+          type: 'key',
+          timestamp: performance.now() * 1000,
+          data,
+        }));
+        log('first keyframe fed', 'ok');
+      } catch (e) {
+        log(`decode threw on key: ${e.message}`, 'err');
+      }
+    }
+    return;
+  }
+
+  // Steady state. Bundle SPS/PPS into the next IDR; everything else is delta.
+  if (t === 7 || t === 8) {
+    nalQueue.push(buf);
+    return;
+  }
+  nalQueue.push(buf);
+  const isKey = t === 5;
+  const data = concat(nalQueue);
+  nalQueue = [];
+  try {
+    decoder.decode(new EncodedVideoChunk({
+      type: isKey ? 'key' : 'delta',
+      timestamp: performance.now() * 1000,
+      data,
+    }));
+  } catch (e) {
+    log(`decode threw: ${e.message}`, 'err');
+  }
+}
+
+function stop() {
+  if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+  if (decoder) { try { decoder.close(); } catch (_) {} decoder = null; }
+  configured = false;
+  sawKey = false;
+  nalQueue = [];
+}
+
+setInterval(() => {
+  const now = performance.now();
+  const dt = (now - lastMeter) / 1000;
+  if (dt > 0.5) {
+    const kbps = Math.round((bytesWindow * 8) / 1024 / dt);
+    const fps = Math.round(framesWindow / dt);
+    bytesWindow = 0; framesWindow = 0; lastMeter = now;
+    $('meter').textContent = ws ? `${fps} fps · ${kbps} kbps` : '';
+  }
+}, 1000);
+
+$('btnStart').onclick = start;
+$('btnStop').onclick = stop;
+
+const u = new URL(location.href);
+if (u.searchParams.get('peer')) {
+  $('peer').value = u.searchParams.get('peer');
+  start();
+}
+</script>
+
+</body>
+</html>

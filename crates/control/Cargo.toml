@@ -1,0 +1,25 @@
+[package]
+name = "xyzen-relay-control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "xyzen-control"
+path = "src/main.rs"
+
+[dependencies]
+xyzen-relay-common = { path = "../common" }
+tokio.workspace = true
+axum.workspace = true
+sqlx.workspace = true
+tower-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

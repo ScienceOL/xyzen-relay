@@ -1,0 +1,26 @@
+[package]
+name = "xyzen-relay-rendezvous"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "xyzen-rendezvous"
+path = "src/main.rs"
+
+[dependencies]
+xyzen-relay-proto = { path = "../proto" }
+xyzen-relay-common = { path = "../common" }
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio-util = { workspace = true, features = ["codec", "net"] }
+bytes.workspace = true
+prost.workspace = true
+futures-util = { workspace = true, features = ["sink"] }
+log.workspace = true
+env_logger.workspace = true
+anyhow.workspace = true
+clap.workspace = true
