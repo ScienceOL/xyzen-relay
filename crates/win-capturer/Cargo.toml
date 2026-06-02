@@ -1,0 +1,45 @@
+[package]
+name = "xyzen-relay-win-capturer"
+version.workspace = true
+edition.workspace = true
+# Dual-licensed for the same reason as mac-capturer: this crate is
+# embedded into the MIT-licensed xyzen-runner via a Cargo path dep.
+# AGPL keeps it consistent with the rest of xyzen-relay's server-side
+# crates when imported into AGPL contexts.
+license = "MIT OR AGPL-3.0-or-later"
+
+[lib]
+path = "src/lib.rs"
+
+# Everything in this crate is gated behind cfg(target_os = "windows")
+# so workspace builds on macOS / Linux are no-ops. The runner's
+# Cargo.toml only includes us under [target.'cfg(target_os = "windows")'.dependencies]
+# which already prevents non-Windows compiles, but we keep the gates
+# inside the source as belt-and-braces.
+
+[target.'cfg(target_os = "windows")'.dependencies]
+log.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+# Windows.Graphics.Capture (WGC) wrapper — production-ready RAII
+# bindings around the WinRT API. Far less boilerplate than driving
+# IGraphicsCaptureItemInterop directly via windows-rs. We only use it
+# for the *capture* side; encoding goes through windows-rs
+# MediaFoundation directly so we can spit out raw H264 NAL units
+# instead of the MP4-container output the windows-capture encoder
+# produces by default.
+windows-capture = "2"
+
+# Direct Windows API bindings for the MediaFoundation H264 encoder
+# (the windows-capture crate's bundled VideoEncoder is MP4-only;
+# we want raw Annex-B to match the mac-capturer wire contract).
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+] }

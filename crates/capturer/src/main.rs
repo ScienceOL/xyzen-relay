@@ -106,7 +106,11 @@ fn start_native(
     fps: u32,
     bitrate_kbps: u32,
 ) -> Result<std::sync::mpsc::Receiver<xyzen_relay_mac_capturer::Nal>> {
-    xyzen_relay_mac_capturer::start(width, height, fps, bitrate_kbps)
+    // display_id=0 selects the primary display, matching mac-capturer's
+    // convention. The standalone capturer binary is a PoC and doesn't
+    // expose a picker — production runners go through xyzen-runner's
+    // executor::stream which threads the user-selected display through.
+    xyzen_relay_mac_capturer::start(width, height, fps, bitrate_kbps, 0)
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 

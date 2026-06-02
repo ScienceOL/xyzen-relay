@@ -9,6 +9,7 @@ members = [
     "crates/stream",
     "crates/capturer",
     "crates/mac-capturer",
+    "crates/win-capturer",
 ]
 
 [workspace.package]
