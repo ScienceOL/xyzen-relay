@@ -317,10 +317,25 @@ impl Drop for H264Encoder {
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
-/// Convert one MediaFoundation AVCC blob (4-byte big-endian length
-/// + NAL bytes, repeating) into a Vec of Annex-B NALs (each
-/// prepended with the 4-byte start code).
+/// Convert one MediaFoundation H264 sample blob into a Vec of Annex-B
+/// NALs (each prepended with the 4-byte start code).
+///
+/// The Windows platform H264 MFT is allowed to emit either format:
+///   * The software encoder (`CLSID_CMSH264EncoderMFT`) emits **Annex-B**
+///     by default — `00 00 00 01 <NAL> 00 00 00 01 <NAL> …`.
+///   * The hardware encoder (Intel/AMD/NVIDIA D3D11 MFTs) emits **AVCC**
+///     — repeated `<4-byte big-endian length><NAL>`.
+///
+/// We sniff the first 4 bytes to pick the right parser. A leading
+/// `00 00 00 01` (or `00 00 01`) is unambiguous — no 32-bit AVCC length
+/// field would ever be `≤ 0x000001` for a real frame, and even an empty
+/// AUD has at least one body byte that breaks the pattern. Falling back
+/// to AVCC keeps the hardware path working if we ever switch off the
+/// software encoder default.
 pub fn avcc_to_annexb(avcc: &[u8]) -> Vec<Vec<u8>> {
+    if is_annexb(avcc) {
+        return annexb_split(avcc);
+    }
     let mut out = Vec::new();
     let mut off = 0;
     while off + 4 <= avcc.len() {
@@ -339,6 +354,52 @@ pub fn avcc_to_annexb(avcc: &[u8]) -> Vec<Vec<u8>> {
         nal.extend_from_slice(&avcc[off..off + n]);
         out.push(nal);
         off += n;
+    }
+    out
+}
+
+fn is_annexb(buf: &[u8]) -> bool {
+    buf.starts_with(&[0, 0, 0, 1]) || buf.starts_with(&[0, 0, 1])
+}
+
+/// Walk an Annex-B byte stream, emitting one Vec per NAL with a
+/// canonical 4-byte start code. Handles both `00 00 00 01` and
+/// `00 00 01` separators; emulation-prevention bytes inside NAL bodies
+/// are left intact (the decoder strips them).
+fn annexb_split(buf: &[u8]) -> Vec<Vec<u8>> {
+    let mut starts: Vec<(usize, usize)> = Vec::new(); // (start_of_nal, start_code_len)
+    let mut i = 0;
+    while i + 3 <= buf.len() {
+        if buf[i] == 0 && buf[i + 1] == 0 {
+            if i + 4 <= buf.len() && buf[i + 2] == 0 && buf[i + 3] == 1 {
+                starts.push((i + 4, 4));
+                i += 4;
+                continue;
+            }
+            if buf[i + 2] == 1 {
+                starts.push((i + 3, 3));
+                i += 3;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    let mut out = Vec::with_capacity(starts.len());
+    for idx in 0..starts.len() {
+        let (begin, _) = starts[idx];
+        let end = if idx + 1 < starts.len() {
+            starts[idx + 1].0 - starts[idx + 1].1
+        } else {
+            buf.len()
+        };
+        if begin >= end {
+            continue;
+        }
+        let nal = &buf[begin..end];
+        let mut framed = Vec::with_capacity(4 + nal.len());
+        framed.extend_from_slice(&[0, 0, 0, 1]);
+        framed.extend_from_slice(nal);
+        out.push(framed);
     }
     out
 }
@@ -408,16 +469,20 @@ unsafe fn find_h264_encoder() -> Result<IMFTransform, Error> {
         guidMajorType: MFMediaType_Video,
         guidSubtype: MFVideoFormat_H264,
     };
-    let flags = MFT_ENUM_FLAG_HARDWARE
-        | MFT_ENUM_FLAG_SORTANDFILTER
-        | MFT_ENUM_FLAG_LOCALMFT
-        | MFT_ENUM_FLAG_TRANSCODE_ONLY;
+
+    // Sync software encoder first. The hardware H264 MFT on modern Windows
+    // is async-only (signals output via METransformHaveOutput events), and
+    // our drain loop here is the synchronous ProcessOutput pattern — pairing
+    // them returns MF_E_TRANSFORM_ASYNC_UNLOCKED on the first ProcessMessage.
+    // Software is fast enough for 1440p@30 and keeps the wire-format path
+    // in lock-step with mac-capturer until we add an async event handler.
+    let flags_sw = MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER;
 
     let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
     let mut count: u32 = 0;
     MFTEnumEx(
         MFT_CATEGORY_VIDEO_ENCODER,
-        flags,
+        flags_sw,
         None,
         Some(&mut output_info),
         &mut activates,
@@ -425,11 +490,14 @@ unsafe fn find_h264_encoder() -> Result<IMFTransform, Error> {
     )?;
 
     if count == 0 {
-        // Fallback: no hardware encoder available — try sync software.
-        let flags_sw = MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER;
+        // No sync MFT — fall back to hardware async and unlock it.
+        let flags_hw = MFT_ENUM_FLAG_HARDWARE
+            | MFT_ENUM_FLAG_SORTANDFILTER
+            | MFT_ENUM_FLAG_LOCALMFT
+            | MFT_ENUM_FLAG_TRANSCODE_ONLY;
         MFTEnumEx(
             MFT_CATEGORY_VIDEO_ENCODER,
-            flags_sw,
+            flags_hw,
             None,
             Some(&mut output_info),
             &mut activates,
@@ -446,6 +514,15 @@ unsafe fn find_h264_encoder() -> Result<IMFTransform, Error> {
     windows::Win32::System::Com::CoTaskMemFree(Some(activates as *const _));
 
     let transform: IMFTransform = first.ActivateObject::<IMFTransform>()?;
+
+    // Async MFTs (hardware encoder) need MF_TRANSFORM_ASYNC_UNLOCK before
+    // any ProcessMessage call — without it ProcessMessage returns
+    // MF_E_TRANSFORM_ASYNC_UNLOCKED. Setting it on a sync MFT is harmless,
+    // so do it unconditionally rather than probing MF_TRANSFORM_ASYNC.
+    if let Ok(attrs) = transform.GetAttributes() {
+        let _ = attrs.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1);
+    }
+
     Ok(transform)
 }
 
@@ -523,6 +600,39 @@ mod tests {
         let avcc: Vec<u8> = vec![0, 0, 0, 5, 0xaa, 0xbb];
         let nals = avcc_to_annexb(&avcc);
         assert!(nals.is_empty());
+    }
+
+    #[test]
+    fn annexb_input_is_split_by_start_code() {
+        // What the MS software H264 encoder actually emits: SPS / PPS /
+        // IDR all glued together with 4-byte start codes. The old
+        // AVCC-only parser misread the leading 00 00 00 01 as length=1
+        // and dropped everything past the first byte.
+        let buf: Vec<u8> = vec![
+            0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x1e, // SPS
+            0, 0, 0, 1, 0x68, 0xce, 0x38, 0x80, // PPS
+            0, 0, 0, 1, 0x65, 0x88, 0x80, 0x00, 0x00, // IDR
+        ];
+        let nals = avcc_to_annexb(&buf);
+        assert_eq!(nals.len(), 3);
+        assert_eq!(nals[0], vec![0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x1e]);
+        assert_eq!(nals[1], vec![0, 0, 0, 1, 0x68, 0xce, 0x38, 0x80]);
+        assert_eq!(
+            nals[2],
+            vec![0, 0, 0, 1, 0x65, 0x88, 0x80, 0x00, 0x00]
+        );
+    }
+
+    #[test]
+    fn annexb_three_byte_start_code_also_splits() {
+        let buf: Vec<u8> = vec![
+            0, 0, 1, 0x09, 0x10, // AUD with 3-byte start code
+            0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x1e, // SPS with 4-byte start code
+        ];
+        let nals = avcc_to_annexb(&buf);
+        assert_eq!(nals.len(), 2);
+        assert_eq!(nals[0], vec![0, 0, 0, 1, 0x09, 0x10]);
+        assert_eq!(nals[1], vec![0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x1e]);
     }
 
     #[test]
