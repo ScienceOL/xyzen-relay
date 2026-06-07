@@ -345,7 +345,22 @@ pub fn avcc_to_annexb(avcc: &[u8]) -> Vec<Vec<u8>> {
 
 /// Pull an `IMFSample`'s contiguous bytes out, run them through
 /// `avcc_to_annexb`, and tag each NAL with the supplied `pts_us`.
+///
+/// Wire framing matches `mac-capturer`'s `emitAnnexBChunk`: each emitted
+/// `Nal::data` is prefixed with an 8-byte big-endian wallclock-µs
+/// timestamp BEFORE the Annex-B start code. The viewer (`useH264Stream`)
+/// strips and consumes those 8 bytes for end-to-end latency, then feeds
+/// the remainder to the decoder. Without this prefix the viewer's
+/// `feed(raw.subarray(8))` slices into the middle of the start code,
+/// `detectCodec` never sees an SPS/VPS, and the canvas stays black.
 fn sample_to_annexb(sample: &IMFSample, pts_us: i64) -> Result<Vec<Nal>, Error> {
+    let wall_us: i64 = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_micros()).ok())
+        .unwrap_or(0);
+    let prefix = wall_us.to_be_bytes();
+
     unsafe {
         let buffer: IMFMediaBuffer = sample.ConvertToContiguousBuffer()?;
         let mut data_ptr: *mut u8 = std::ptr::null_mut();
@@ -356,7 +371,12 @@ fn sample_to_annexb(sample: &IMFSample, pts_us: i64) -> Result<Vec<Nal>, Error> 
         buffer.Unlock()?;
         Ok(avcc_to_annexb(&bytes)
             .into_iter()
-            .map(|data| Nal { data, pts_us })
+            .map(|annexb| {
+                let mut data = Vec::with_capacity(prefix.len() + annexb.len());
+                data.extend_from_slice(&prefix);
+                data.extend_from_slice(&annexb);
+                Nal { data, pts_us }
+            })
             .collect())
     }
 }
