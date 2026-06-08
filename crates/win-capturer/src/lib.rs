@@ -32,14 +32,14 @@
 
 use std::sync::mpsc;
 
+mod display;
 mod encoder;
 mod publisher;
-mod display;
 
 pub use display::{list_displays, DisplayInfo};
 pub use publisher::{
-    active_display_id, bitrate_kbps, fps, resolution, select_display, set_bitrate_kbps,
-    set_fps, set_resolution, start,
+    active_display_id, bitrate_kbps, fps, resolution, select_display, set_bitrate_kbps, set_fps,
+    set_resolution, start,
 };
 
 /// One H264 NAL unit, with the 4-byte Annex-B start code already prepended.

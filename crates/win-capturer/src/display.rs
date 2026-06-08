@@ -26,9 +26,7 @@ pub fn list_displays() -> Vec<DisplayInfo> {
     // single primary one. Resolve its device name once and compare
     // against the enumerate list — cheap, no race conditions during
     // the snapshot of monitor topology this function returns.
-    let primary_name = Monitor::primary()
-        .ok()
-        .and_then(|m| m.device_name().ok());
+    let primary_name = Monitor::primary().ok().and_then(|m| m.device_name().ok());
 
     match Monitor::enumerate() {
         Ok(monitors) => monitors

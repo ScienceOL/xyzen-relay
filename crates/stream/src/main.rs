@@ -297,9 +297,7 @@ impl WarmupWindow {
                     // do until the next keyframe arrives.
                     return false;
                 }
-                let projected = self
-                    .since_keyframe_total_bytes
-                    .saturating_add(frame.len());
+                let projected = self.since_keyframe_total_bytes.saturating_add(frame.len());
                 if projected > WARMUP_DELTA_MAX_BYTES {
                     // Overflow guard: drop the cache rather than ship
                     // stale partial state to the next viewer.
@@ -566,10 +564,7 @@ mod tests {
         );
         // TRAIL_R (type 1) → 0x02 → delta.
         let p = [0u8, 0, 0, 1, 0x02, 0x01];
-        assert_eq!(
-            classify_nal(&stamp(&p), Some(Codec::Hevc)),
-            NalKind::Delta
-        );
+        assert_eq!(classify_nal(&stamp(&p), Some(Codec::Hevc)), NalKind::Delta);
     }
 
     #[test]
@@ -599,10 +594,7 @@ mod tests {
             NalKind::Keyframe
         );
         let p = [0u8, 0, 0, 1, 0x41, 0x9A];
-        assert_eq!(
-            classify_nal(&stamp(&p), Some(Codec::H264)),
-            NalKind::Delta
-        );
+        assert_eq!(classify_nal(&stamp(&p), Some(Codec::H264)), NalKind::Delta);
     }
 
     #[test]

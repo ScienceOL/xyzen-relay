@@ -127,29 +127,20 @@ impl H264Encoder {
             output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
             output_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate_bps)?;
-            output_type.SetUINT32(
-                &MF_MT_INTERLACE_MODE,
-                MFVideoInterlace_Progressive.0 as u32,
-            )?;
+            output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
             mf_set_size(&output_type, &MF_MT_FRAME_SIZE, width, height)?;
             mf_set_size(&output_type, &MF_MT_FRAME_RATE, fps, 1)?;
             mf_set_size(&output_type, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
             // High profile = sharper text on screen content. WebCodecs
             // / iOS / Android all decode High fine.
-            output_type.SetUINT32(
-                &MF_MT_MPEG2_PROFILE,
-                eAVEncH264VProfile_High.0 as u32,
-            )?;
+            output_type.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32)?;
             transform.SetOutputType(output_id, &output_type, 0)?;
 
             // Input type: NV12 frames at the same resolution.
             let input_type: IMFMediaType = MFCreateMediaType()?;
             input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             input_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
-            input_type.SetUINT32(
-                &MF_MT_INTERLACE_MODE,
-                MFVideoInterlace_Progressive.0 as u32,
-            )?;
+            input_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
             mf_set_size(&input_type, &MF_MT_FRAME_SIZE, width, height)?;
             mf_set_size(&input_type, &MF_MT_FRAME_RATE, fps, 1)?;
             mf_set_size(&input_type, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
@@ -238,8 +229,7 @@ impl H264Encoder {
                 None
             } else {
                 unsafe {
-                    let buf: IMFMediaBuffer =
-                        MFCreateMemoryBuffer(stream_info.cbSize.max(1))?;
+                    let buf: IMFMediaBuffer = MFCreateMemoryBuffer(stream_info.cbSize.max(1))?;
                     let s: IMFSample = MFCreateSample()?;
                     s.AddBuffer(&buf)?;
                     Some(s)
@@ -267,10 +257,8 @@ impl H264Encoder {
 
             // Always reclaim the sample / events from the buffer wrapper
             // so they drop cleanly regardless of HRESULT.
-            let produced =
-                unsafe { std::mem::ManuallyDrop::take(&mut output_buffer.pSample) };
-            let _events =
-                unsafe { std::mem::ManuallyDrop::take(&mut output_buffer.pEvents) };
+            let produced = unsafe { std::mem::ManuallyDrop::take(&mut output_buffer.pSample) };
+            let _events = unsafe { std::mem::ManuallyDrop::take(&mut output_buffer.pEvents) };
 
             match result {
                 Ok(()) => {
@@ -339,12 +327,8 @@ pub fn avcc_to_annexb(avcc: &[u8]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     let mut off = 0;
     while off + 4 <= avcc.len() {
-        let n = u32::from_be_bytes([
-            avcc[off],
-            avcc[off + 1],
-            avcc[off + 2],
-            avcc[off + 3],
-        ]) as usize;
+        let n =
+            u32::from_be_bytes([avcc[off], avcc[off + 1], avcc[off + 2], avcc[off + 3]]) as usize;
         off += 4;
         if off + n > avcc.len() {
             break;
@@ -442,12 +426,7 @@ fn sample_to_annexb(sample: &IMFSample, pts_us: i64) -> Result<Vec<Nal>, Error> 
     }
 }
 
-unsafe fn mf_set_size(
-    t: &IMFMediaType,
-    key: &GUID,
-    hi: u32,
-    lo: u32,
-) -> windows::core::Result<()> {
+unsafe fn mf_set_size(t: &IMFMediaType, key: &GUID, hi: u32, lo: u32) -> windows::core::Result<()> {
     t.SetUINT64(key, ((hi as u64) << 32) | (lo as u64))
 }
 
@@ -585,10 +564,7 @@ mod tests {
 
     #[test]
     fn avcc_two_nals_roundtrip() {
-        let avcc: Vec<u8> = [
-            0u8, 0, 0, 3, 0xaa, 0xbb, 0xcc, 0, 0, 0, 3, 0xdd, 0xee, 0xff,
-        ]
-        .to_vec();
+        let avcc: Vec<u8> = [0u8, 0, 0, 3, 0xaa, 0xbb, 0xcc, 0, 0, 0, 3, 0xdd, 0xee, 0xff].to_vec();
         let nals = avcc_to_annexb(&avcc);
         assert_eq!(nals.len(), 2);
         assert_eq!(nals[0], vec![0, 0, 0, 1, 0xaa, 0xbb, 0xcc]);
@@ -617,10 +593,7 @@ mod tests {
         assert_eq!(nals.len(), 3);
         assert_eq!(nals[0], vec![0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x1e]);
         assert_eq!(nals[1], vec![0, 0, 0, 1, 0x68, 0xce, 0x38, 0x80]);
-        assert_eq!(
-            nals[2],
-            vec![0, 0, 0, 1, 0x65, 0x88, 0x80, 0x00, 0x00]
-        );
+        assert_eq!(nals[2], vec![0, 0, 0, 1, 0x65, 0x88, 0x80, 0x00, 0x00]);
     }
 
     #[test]

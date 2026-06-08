@@ -250,8 +250,7 @@ fn run_capture_thread() -> Result<(), Box<dyn std::error::Error>> {
         // bad id.
         let monitor = match snapshot.display_id {
             0 => Monitor::primary()?,
-            n => Monitor::from_index(n as usize)
-                .or_else(|_| Monitor::primary())?,
+            n => Monitor::from_index(n as usize).or_else(|_| Monitor::primary())?,
         };
 
         // ColorFormat::Bgra8 + windows-capture's nopadding helper
