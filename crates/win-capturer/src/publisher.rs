@@ -255,10 +255,15 @@ fn run_capture_thread() -> Result<(), Box<dyn std::error::Error>> {
 
         // ColorFormat::Bgra8 + windows-capture's nopadding helper
         // gives us tightly-packed BGRA the encoder accepts.
+        // WithoutBorder suppresses the OS-drawn yellow capture indicator
+        // (Win 11 22H2+ honours this; older builds may still force it).
+        // Without this, the entire active monitor gets a thick yellow
+        // outline the moment publisher.start() is called — visible to the
+        // local user, not just the remote viewer, which is jarring.
         let settings: Settings<CaptureSnapshot, Monitor> = Settings::new(
             monitor,
             CursorCaptureSettings::WithCursor,
-            DrawBorderSettings::Default,
+            DrawBorderSettings::WithoutBorder,
             SecondaryWindowSettings::Default,
             MinimumUpdateIntervalSettings::Default,
             DirtyRegionSettings::Default,
@@ -299,6 +304,12 @@ struct ScreenshareHandler {
     /// Reusable pack buffer for stripping GPU stride padding. Keeps
     /// us off the allocator on every frame.
     pack_buf: Vec<u8>,
+    /// Dimensions the encoder was configured with on this session.
+    /// `None` until the first frame arrives — encoder configuration is
+    /// deferred so the first frame's actual D3D11 texture size becomes
+    /// the authoritative resolution. After that, a mismatch means a
+    /// real topology change and triggers a rebuild.
+    configured_dims: Option<(u32, u32)>,
 }
 
 impl GraphicsCaptureApiHandler for ScreenshareHandler {
@@ -306,18 +317,22 @@ impl GraphicsCaptureApiHandler for ScreenshareHandler {
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
     fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-        let snapshot = ctx.flags;
-        let mut encoder = H264Encoder::new();
-        encoder.configure(
-            snapshot.width,
-            snapshot.height,
-            snapshot.fps,
-            snapshot.bitrate_kbps.saturating_mul(1000),
-        )?;
+        // Encoder is intentionally NOT configured here. WGC frames'
+        // dimensions can disagree with `Monitor::width()/height()`
+        // (logical pels via EnumDisplaySettingsW vs. the actual
+        // D3D11_TEXTURE2D_DESC the capture session hands us — DPI scaling
+        // and HDR can split them). Configuring here with the monitor's
+        // numbers and then comparing against frame dims on every callback
+        // used to flip `needs_rebuild` every frame, tearing down the
+        // GraphicsCaptureSession constantly and forcing the OS to redraw
+        // its yellow capture indicator each rebuild — visible as a
+        // strobing border on Windows builds that don't honour
+        // `WithoutBorder`.
         Ok(Self {
-            encoder,
-            snapshot,
+            encoder: H264Encoder::new(),
+            snapshot: ctx.flags,
             pack_buf: Vec::new(),
+            configured_dims: None,
         })
     }
 
@@ -345,12 +360,30 @@ impl GraphicsCaptureApiHandler for ScreenshareHandler {
         let frame_w = frame.width();
         let frame_h = frame.height();
 
-        // Encoder + frame dimension mismatch → tear down and rebuild.
-        // Common after a monitor topology change (DPI scale, rotation).
-        if frame_w != self.snapshot.width || frame_h != self.snapshot.height {
-            state().lock().expect("state mutex").needs_rebuild = true;
-            capture_control.stop();
-            return Ok(());
+        match self.configured_dims {
+            None => {
+                // First frame on this session: trust the WGC texture
+                // size and configure the encoder against it. This
+                // pins the encoder to whatever dimensions the GPU is
+                // actually delivering, so later frames can't trip a
+                // false-positive rebuild.
+                self.encoder.configure(
+                    frame_w,
+                    frame_h,
+                    self.snapshot.fps,
+                    self.snapshot.bitrate_kbps.saturating_mul(1000),
+                )?;
+                self.configured_dims = Some((frame_w, frame_h));
+            }
+            Some((cw, ch)) if frame_w != cw || frame_h != ch => {
+                // Mid-session frame dims changed (display rotation,
+                // DPI swap, monitor swap on the same handle). Tear
+                // down and rebuild.
+                state().lock().expect("state mutex").needs_rebuild = true;
+                capture_control.stop();
+                return Ok(());
+            }
+            _ => {}
         }
 
         let buffer = frame.buffer()?;
